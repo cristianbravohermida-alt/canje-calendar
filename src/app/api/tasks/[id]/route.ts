@@ -5,7 +5,6 @@ const TASK_SELECT = `*,
   assignee:profiles!tasks_assigned_to_fkey(id, display_name, color, email),
   creator:profiles!tasks_created_by_fkey(id, display_name, color, email)`;
 
-// PATCH /api/tasks/[id]
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -29,6 +28,10 @@ export async function PATCH(
     "assigned_to",
     "recurrence_type",
     "recurrence_until",
+    "recurrence_interval",
+    "recurrence_freq",
+    "recurrence_weekdays",
+    "recurrence_count",
   ];
   const patch: Record<string, unknown> = {};
   for (const k of allowed) {
@@ -46,7 +49,6 @@ export async function PATCH(
   return NextResponse.json({ task: data });
 }
 
-// DELETE /api/tasks/[id]
 export async function DELETE(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }

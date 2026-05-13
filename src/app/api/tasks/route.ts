@@ -17,7 +17,7 @@ export async function GET(request: NextRequest) {
   const from = searchParams.get("from");
   const to = searchParams.get("to");
 
-  // Tareas no recurrentes en rango (filtrado por fecha en server)
+  // Tareas no recurrentes en rango
   let oneOffQuery = supabase
     .from("tasks")
     .select(TASK_SELECT)
@@ -28,9 +28,11 @@ export async function GET(request: NextRequest) {
   if (oneOffErr)
     return NextResponse.json({ error: oneOffErr.message }, { status: 400 });
 
-  // Tareas recurrentes que podrían tener instancias en el rango.
-  // - Empezaron antes de "to" (su anchor <= to)
-  // - Y o no tienen recurrence_until, o ese hasta >= from
+  // Tareas recurrentes que pueden tener instancias en el rango.
+  // Filtramos por anchor <= to. El "until" sólo aplica a presets simples;
+  // las custom con endType=count terminan por número de ocurrencias, lo
+  // cual sólo se sabe en el cliente al expandir. Por eso traemos todas
+  // las recurrentes que cumplen anchor<=to y dejamos que el cliente decida.
   let recQuery = supabase
     .from("tasks")
     .select(TASK_SELECT)
@@ -44,7 +46,6 @@ export async function GET(request: NextRequest) {
   if (recErr)
     return NextResponse.json({ error: recErr.message }, { status: 400 });
 
-  // El cliente expande las recurrencias (ver src/lib/recurrence.ts).
   return NextResponse.json({ tasks: [...(oneOff || []), ...(recurring || [])] });
 }
 
@@ -68,6 +69,10 @@ export async function POST(request: NextRequest) {
     assigned_to = null,
     recurrence_type = "none",
     recurrence_until = null,
+    recurrence_interval = 1,
+    recurrence_freq = null,
+    recurrence_weekdays = null,
+    recurrence_count = null,
   } = body || {};
 
   if (!title || !task_date) {
@@ -90,6 +95,10 @@ export async function POST(request: NextRequest) {
       assigned_to,
       recurrence_type,
       recurrence_until,
+      recurrence_interval,
+      recurrence_freq,
+      recurrence_weekdays,
+      recurrence_count,
       created_by: user.id,
     })
     .select(TASK_SELECT)

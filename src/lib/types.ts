@@ -6,7 +6,19 @@ export type RecurrenceType =
   | "weekdays"
   | "weekly"
   | "monthly_nth_weekday"
-  | "yearly";
+  | "yearly"
+  | "custom";
+
+export type CustomFreq = "day" | "week" | "month" | "year";
+
+export interface CustomRecurrenceConfig {
+  interval: number; // cada N (>=1)
+  freq: CustomFreq;
+  weekdays: number[]; // 0=Dom..6=Sáb, solo se usa cuando freq="week"
+  endType: "never" | "until" | "count";
+  endDate?: string; // YYYY-MM-DD, cuando endType="until"
+  endCount?: number; // cuando endType="count"
+}
 
 export interface Profile {
   id: string;
@@ -20,8 +32,8 @@ export interface Task {
   id: string;
   title: string;
   description: string | null;
-  task_date: string; // YYYY-MM-DD (en instancias expandidas, es la fecha de la instancia)
-  task_time: string | null; // HH:MM:SS
+  task_date: string; // YYYY-MM-DD (en instancias expandidas, fecha de la instancia)
+  task_time: string | null;
   status: TaskStatus;
   priority: TaskPriority;
   tags: string[];
@@ -30,9 +42,14 @@ export interface Task {
   created_at: string;
   updated_at: string;
   recurrence_type: RecurrenceType;
-  recurrence_until: string | null; // YYYY-MM-DD
-  // Calculado en cliente al expandir recurrencias (no viene de la DB):
-  series_anchor_date?: string; // la fecha original de la tarea recurrente
+  recurrence_until: string | null;
+  // Campos para "custom"
+  recurrence_interval: number;
+  recurrence_freq: CustomFreq | null;
+  recurrence_weekdays: number[] | null;
+  recurrence_count: number | null;
+  // Calculado en cliente al expandir (no viene de la DB)
+  series_anchor_date?: string;
   // Joined desde profiles
   assignee?: Profile | null;
   creator?: Profile | null;
@@ -49,4 +66,8 @@ export interface TaskInput {
   assigned_to?: string | null;
   recurrence_type?: RecurrenceType;
   recurrence_until?: string | null;
+  recurrence_interval?: number;
+  recurrence_freq?: CustomFreq | null;
+  recurrence_weekdays?: number[] | null;
+  recurrence_count?: number | null;
 }

@@ -4,13 +4,16 @@ import { useEffect, useState } from "react";
 import { format } from "date-fns";
 import { es } from "date-fns/locale";
 import type {
+  CustomRecurrenceConfig,
   Profile,
   RecurrenceType,
   Task,
   TaskPriority,
   TaskStatus,
 } from "@/lib/types";
+import { formatCustomRule } from "@/lib/utils";
 import DateInput from "./DateInput";
+import CustomRecurrenceModal from "./CustomRecurrenceModal";
 
 interface Props {
   open: boolean;
@@ -44,7 +47,9 @@ function buildRecurrenceOptions(
     { v: "daily", label: "Todos los días" },
     { v: "weekdays", label: "Todos los días hábiles (lun–vie)" },
   ];
-  if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return base;
+  if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+    return [...base, { v: "custom", label: "Personalizado…" }];
+  }
   const d = new Date(dateStr + "T00:00:00");
   const weekday = format(d, "EEEE", { locale: es });
   const dayOfMonth = d.getDate();
@@ -59,6 +64,7 @@ function buildRecurrenceOptions(
       label: `Todos los meses, el ${nthLabel} ${weekday}`,
     },
     { v: "yearly", label: `Anualmente, el ${dayOfMonth} de ${monthName}` },
+    { v: "custom", label: "Personalizado…" },
   ];
 }
 
@@ -82,6 +88,10 @@ export default function TaskModal({
   const [assignedTo, setAssignedTo] = useState<string>("");
   const [recurrenceType, setRecurrenceType] = useState<RecurrenceType>("none");
   const [recurrenceUntil, setRecurrenceUntil] = useState<string>("");
+  const [customConfig, setCustomConfig] =
+    useState<CustomRecurrenceConfig | null>(null);
+  const [showCustomModal, setShowCustomModal] = useState(false);
+  const [previousType, setPreviousType] = useState<RecurrenceType | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -90,7 +100,6 @@ export default function TaskModal({
     if (editing) {
       setTitle(editing.title);
       setDescription(editing.description || "");
-      // En recurrentes, mostrar la fecha original de la serie, no la fecha de la instancia clickeada
       setTaskDate(editing.series_anchor_date || editing.task_date);
       setTaskTime(editing.task_time ? editing.task_time.slice(0, 5) : "");
       setStatus(editing.status);
@@ -98,7 +107,28 @@ export default function TaskModal({
       setTagsInput((editing.tags || []).join(", "));
       setAssignedTo(editing.assigned_to || "");
       setRecurrenceType(editing.recurrence_type || "none");
-      setRecurrenceUntil(editing.recurrence_until || "");
+      setRecurrenceUntil(
+        editing.recurrence_type !== "custom" && editing.recurrence_until
+          ? editing.recurrence_until
+          : ""
+      );
+
+      if (editing.recurrence_type === "custom") {
+        setCustomConfig({
+          interval: editing.recurrence_interval ?? 1,
+          freq: editing.recurrence_freq ?? "week",
+          weekdays: editing.recurrence_weekdays ?? [],
+          endType: editing.recurrence_count
+            ? "count"
+            : editing.recurrence_until
+              ? "until"
+              : "never",
+          endDate: editing.recurrence_until ?? undefined,
+          endCount: editing.recurrence_count ?? undefined,
+        });
+      } else {
+        setCustomConfig(null);
+      }
     } else {
       setTitle("");
       setDescription("");
@@ -110,20 +140,59 @@ export default function TaskModal({
       setAssignedTo(currentUserId);
       setRecurrenceType("none");
       setRecurrenceUntil("");
+      setCustomConfig(null);
     }
     setError(null);
+    setPreviousType(null);
+    setShowCustomModal(false);
   }, [open, editing, initialDate, currentUserId]);
+
+  function handleRecurrenceChange(value: string) {
+    if (value === "custom") {
+      // Si ya estaba en custom, sólo reabrir el modal para editar
+      setPreviousType(recurrenceType);
+      setRecurrenceType("custom");
+      setShowCustomModal(true);
+    } else {
+      setRecurrenceType(value as RecurrenceType);
+      setCustomConfig(null);
+    }
+  }
+
+  function handleCustomSave(config: CustomRecurrenceConfig) {
+    setCustomConfig(config);
+    setRecurrenceType("custom");
+    setShowCustomModal(false);
+    setPreviousType(null);
+  }
+
+  function handleCustomCancel() {
+    setShowCustomModal(false);
+    // Si veníamos de otro tipo y no hay config, revertir
+    if (previousType !== null && previousType !== "custom" && !customConfig) {
+      setRecurrenceType(previousType);
+    }
+    setPreviousType(null);
+  }
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
     if (!title.trim()) return;
+
+    // Validación: si es custom, debe tener config
+    if (recurrenceType === "custom" && !customConfig) {
+      setError("Configura la recurrencia personalizada antes de guardar.");
+      return;
+    }
+
     setSaving(true);
     setError(null);
     const tags = tagsInput
       .split(",")
       .map((t) => t.trim())
       .filter(Boolean);
-    const payload = {
+
+    const payload: Record<string, unknown> = {
       title: title.trim(),
       description: description.trim() || null,
       task_date: taskDate,
@@ -133,9 +202,30 @@ export default function TaskModal({
       tags,
       assigned_to: assignedTo || null,
       recurrence_type: recurrenceType,
-      recurrence_until:
-        recurrenceType !== "none" && recurrenceUntil ? recurrenceUntil : null,
+      recurrence_until: null,
+      recurrence_interval: 1,
+      recurrence_freq: null,
+      recurrence_weekdays: null,
+      recurrence_count: null,
     };
+
+    if (recurrenceType !== "none") {
+      if (recurrenceType === "custom" && customConfig) {
+        payload.recurrence_interval = customConfig.interval;
+        payload.recurrence_freq = customConfig.freq;
+        payload.recurrence_weekdays =
+          customConfig.freq === "week" ? customConfig.weekdays : null;
+        if (customConfig.endType === "until" && customConfig.endDate) {
+          payload.recurrence_until = customConfig.endDate;
+        }
+        if (customConfig.endType === "count" && customConfig.endCount) {
+          payload.recurrence_count = customConfig.endCount;
+        }
+      } else if (recurrenceUntil) {
+        payload.recurrence_until = recurrenceUntil;
+      }
+    }
+
     try {
       const url = editing ? `/api/tasks/${editing.id}` : "/api/tasks";
       const method = editing ? "PATCH" : "POST";
@@ -181,245 +271,271 @@ export default function TaskModal({
   if (!open) return null;
 
   const recurrenceOptions = buildRecurrenceOptions(taskDate);
-  const isRecurring = recurrenceType !== "none";
+  const isRecurringPreset =
+    recurrenceType !== "none" && recurrenceType !== "custom";
   const wasEditingRecurring =
     !!editing && !!editing.recurrence_type && editing.recurrence_type !== "none";
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center px-4 py-8 bg-black/30 backdrop-blur-sm"
-      onClick={onClose}
-    >
+    <>
       <div
-        className="card w-full max-w-[560px] max-h-[90vh] overflow-y-auto"
-        onClick={(e) => e.stopPropagation()}
+        className="fixed inset-0 z-50 flex items-center justify-center px-4 py-8 bg-black/30 backdrop-blur-sm"
+        onClick={onClose}
       >
-        <div className="px-6 py-4 border-b border-border-soft flex items-center justify-between">
-          <h2 className="text-[16px] font-semibold">
-            {editing ? "Editar tarea" : "Nueva tarea"}
-          </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-ink-muted hover:text-ink text-[20px] leading-none"
-            aria-label="Cerrar"
-          >
-            ×
-          </button>
-        </div>
-
-        <form onSubmit={handleSave} className="p-6 space-y-4">
-          {wasEditingRecurring && (
-            <div className="rounded-lg bg-[#fbeed2] border border-[#e8dcb5] px-3.5 py-2.5 text-[12.5px] text-[#8a5f0e] leading-snug">
-              🔁 Esta tarea se repite. Los cambios afectarán toda la serie.
-            </div>
-          )}
-
-          <div>
-            <label className="label" htmlFor="title">
-              Título *
-            </label>
-            <input
-              id="title"
-              type="text"
-              required
-              autoFocus
-              className="input"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="Revisar facturas pendientes"
-            />
+        <div
+          className="card w-full max-w-[560px] max-h-[90vh] overflow-y-auto"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="px-6 py-4 border-b border-border-soft flex items-center justify-between">
+            <h2 className="text-[16px] font-semibold">
+              {editing ? "Editar tarea" : "Nueva tarea"}
+            </h2>
+            <button
+              type="button"
+              onClick={onClose}
+              className="text-ink-muted hover:text-ink text-[20px] leading-none"
+              aria-label="Cerrar"
+            >
+              ×
+            </button>
           </div>
 
-          <div>
-            <label className="label" htmlFor="desc">
-              Descripción
-            </label>
-            <textarea
-              id="desc"
-              rows={3}
-              className="input resize-y"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="Detalles, contexto, links…"
-            />
-          </div>
+          <form onSubmit={handleSave} className="p-6 space-y-4">
+            {wasEditingRecurring && (
+              <div className="rounded-lg bg-[#fbeed2] border border-[#e8dcb5] px-3.5 py-2.5 text-[12.5px] text-[#8a5f0e] leading-snug">
+                🔁 Esta tarea se repite. Los cambios afectarán toda la serie.
+              </div>
+            )}
 
-          <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="label" htmlFor="date">
-                Fecha *
+              <label className="label" htmlFor="title">
+                Título *
               </label>
-              <DateInput
-                id="date"
+              <input
+                id="title"
+                type="text"
                 required
-                value={taskDate}
-                onChange={setTaskDate}
+                autoFocus
+                className="input"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="Revisar facturas pendientes"
               />
             </div>
+
             <div>
-              <label className="label" htmlFor="time">
-                Hora{" "}
+              <label className="label" htmlFor="desc">
+                Descripción
+              </label>
+              <textarea
+                id="desc"
+                rows={3}
+                className="input resize-y"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="Detalles, contexto, links…"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="label" htmlFor="date">
+                  Fecha *
+                </label>
+                <DateInput
+                  id="date"
+                  required
+                  value={taskDate}
+                  onChange={setTaskDate}
+                />
+              </div>
+              <div>
+                <label className="label" htmlFor="time">
+                  Hora{" "}
+                  <span className="font-normal text-ink-muted normal-case tracking-normal">
+                    (opcional)
+                  </span>
+                </label>
+                <input
+                  id="time"
+                  type="time"
+                  className="input"
+                  value={taskTime}
+                  onChange={(e) => setTaskTime(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="label" htmlFor="recurrence">
+                🔁 Repetición
+              </label>
+              <select
+                id="recurrence"
+                className="input cursor-pointer"
+                value={recurrenceType}
+                onChange={(e) => handleRecurrenceChange(e.target.value)}
+              >
+                {recurrenceOptions.map((opt) => (
+                  <option key={opt.v} value={opt.v}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+
+              {/* Resumen + editar para custom */}
+              {recurrenceType === "custom" && customConfig && (
+                <div className="mt-1.5 flex items-center justify-between gap-2 text-[12.5px] text-ink-soft">
+                  <span className="truncate">
+                    ↪ {formatCustomRule(customConfig)}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setShowCustomModal(true)}
+                    className="text-[11.5px] text-ink underline whitespace-nowrap"
+                  >
+                    Editar
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* "Repetir hasta" sólo para presets, no para custom (custom ya tiene su propio fin) */}
+            {isRecurringPreset && (
+              <div>
+                <label className="label" htmlFor="until">
+                  Repetir hasta{" "}
+                  <span className="font-normal text-ink-muted normal-case tracking-normal">
+                    (opcional · vacío = sin fin)
+                  </span>
+                </label>
+                <DateInput
+                  id="until"
+                  value={recurrenceUntil}
+                  onChange={setRecurrenceUntil}
+                  min={taskDate}
+                />
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <span className="label">Estado</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {STATUSES.map((s) => (
+                    <button
+                      type="button"
+                      key={s.v}
+                      onClick={() => setStatus(s.v)}
+                      className={`pill ${
+                        status === s.v ? "active" : ""
+                      } text-[12px] px-3 py-1`}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <span className="label">Prioridad</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {PRIORITIES.map((p) => (
+                    <button
+                      type="button"
+                      key={p.v}
+                      onClick={() => setPriority(p.v)}
+                      className={`pill ${
+                        priority === p.v ? "active" : ""
+                      } text-[12px] px-3 py-1`}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <label className="label" htmlFor="assigned">
+                Asignar a
+              </label>
+              <select
+                id="assigned"
+                className="input cursor-pointer"
+                value={assignedTo}
+                onChange={(e) => setAssignedTo(e.target.value)}
+              >
+                <option value="">— Sin asignar —</option>
+                {users.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.display_name} ({u.email})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="label" htmlFor="tags">
+                Etiquetas{" "}
                 <span className="font-normal text-ink-muted normal-case tracking-normal">
-                  (opcional)
+                  (separadas por coma)
                 </span>
               </label>
               <input
-                id="time"
-                type="time"
+                id="tags"
+                type="text"
                 className="input"
-                value={taskTime}
-                onChange={(e) => setTaskTime(e.target.value)}
+                value={tagsInput}
+                onChange={(e) => setTagsInput(e.target.value)}
+                placeholder="finanzas, jefe, urgente"
               />
             </div>
-          </div>
 
-          <div>
-            <label className="label" htmlFor="recurrence">
-              🔁 Repetición
-            </label>
-            <select
-              id="recurrence"
-              className="input cursor-pointer"
-              value={recurrenceType}
-              onChange={(e) =>
-                setRecurrenceType(e.target.value as RecurrenceType)
-              }
-            >
-              {recurrenceOptions.map((opt) => (
-                <option key={opt.v} value={opt.v}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {isRecurring && (
-            <div>
-              <label className="label" htmlFor="until">
-                Repetir hasta{" "}
-                <span className="font-normal text-ink-muted normal-case tracking-normal">
-                  (opcional · vacío = sin fin)
-                </span>
-              </label>
-              <DateInput
-                id="until"
-                value={recurrenceUntil}
-                onChange={setRecurrenceUntil}
-                min={taskDate}
-              />
-            </div>
-          )}
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <span className="label">Estado</span>
-              <div className="flex flex-wrap gap-1.5">
-                {STATUSES.map((s) => (
-                  <button
-                    type="button"
-                    key={s.v}
-                    onClick={() => setStatus(s.v)}
-                    className={`pill ${
-                      status === s.v ? "active" : ""
-                    } text-[12px] px-3 py-1`}
-                  >
-                    {s.label}
-                  </button>
-                ))}
+            {error && (
+              <div className="rounded-lg bg-urgent-bg border border-urgent/30 px-3.5 py-2.5 text-[13px] text-urgent-fg">
+                {error}
               </div>
-            </div>
-            <div>
-              <span className="label">Prioridad</span>
-              <div className="flex flex-wrap gap-1.5">
-                {PRIORITIES.map((p) => (
-                  <button
-                    type="button"
-                    key={p.v}
-                    onClick={() => setPriority(p.v)}
-                    className={`pill ${
-                      priority === p.v ? "active" : ""
-                    } text-[12px] px-3 py-1`}
-                  >
-                    {p.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          <div>
-            <label className="label" htmlFor="assigned">
-              Asignar a
-            </label>
-            <select
-              id="assigned"
-              className="input cursor-pointer"
-              value={assignedTo}
-              onChange={(e) => setAssignedTo(e.target.value)}
-            >
-              <option value="">— Sin asignar —</option>
-              {users.map((u) => (
-                <option key={u.id} value={u.id}>
-                  {u.display_name} ({u.email})
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="label" htmlFor="tags">
-              Etiquetas{" "}
-              <span className="font-normal text-ink-muted normal-case tracking-normal">
-                (separadas por coma)
-              </span>
-            </label>
-            <input
-              id="tags"
-              type="text"
-              className="input"
-              value={tagsInput}
-              onChange={(e) => setTagsInput(e.target.value)}
-              placeholder="finanzas, jefe, urgente"
-            />
-          </div>
-
-          {error && (
-            <div className="rounded-lg bg-urgent-bg border border-urgent/30 px-3.5 py-2.5 text-[13px] text-urgent-fg">
-              {error}
-            </div>
-          )}
-
-          <div className="flex gap-2 pt-2">
-            <button
-              type="submit"
-              disabled={saving}
-              className="btn btn-primary flex-1 justify-center py-2.5"
-            >
-              {saving ? (
-                <span className="spinner"></span>
-              ) : editing ? (
-                "Guardar cambios"
-              ) : (
-                "Crear tarea"
-              )}
-            </button>
-            {editing && (
-              <button
-                type="button"
-                disabled={saving}
-                onClick={handleDelete}
-                className="btn btn-danger py-2.5"
-              >
-                Eliminar
-              </button>
             )}
-            <button type="button" onClick={onClose} className="btn py-2.5">
-              Cancelar
-            </button>
-          </div>
-        </form>
+
+            <div className="flex gap-2 pt-2">
+              <button
+                type="submit"
+                disabled={saving}
+                className="btn btn-primary flex-1 justify-center py-2.5"
+              >
+                {saving ? (
+                  <span className="spinner"></span>
+                ) : editing ? (
+                  "Guardar cambios"
+                ) : (
+                  "Crear tarea"
+                )}
+              </button>
+              {editing && (
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={handleDelete}
+                  className="btn btn-danger py-2.5"
+                >
+                  Eliminar
+                </button>
+              )}
+              <button type="button" onClick={onClose} className="btn py-2.5">
+                Cancelar
+              </button>
+            </div>
+          </form>
+        </div>
       </div>
-    </div>
+
+      <CustomRecurrenceModal
+        open={showCustomModal}
+        onClose={handleCustomCancel}
+        onSave={handleCustomSave}
+        anchorDate={taskDate}
+        initial={customConfig}
+      />
+    </>
   );
 }
