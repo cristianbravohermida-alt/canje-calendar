@@ -1,6 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
+const TASK_SELECT = `*,
+  assignee:profiles!tasks_assigned_to_fkey(id, display_name, color, email),
+  creator:profiles!tasks_created_by_fkey(id, display_name, color, email)`;
+
 // GET /api/tasks?from=YYYY-MM-DD&to=YYYY-MM-DD
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -13,22 +17,35 @@ export async function GET(request: NextRequest) {
   const from = searchParams.get("from");
   const to = searchParams.get("to");
 
-  let query = supabase
+  // Tareas no recurrentes en rango (filtrado por fecha en server)
+  let oneOffQuery = supabase
     .from("tasks")
-    .select(
-      `*,
-       assignee:profiles!tasks_assigned_to_fkey(id, display_name, color, email),
-       creator:profiles!tasks_created_by_fkey(id, display_name, color, email)`
-    )
-    .order("task_date", { ascending: true })
-    .order("task_time", { ascending: true, nullsFirst: false });
+    .select(TASK_SELECT)
+    .eq("recurrence_type", "none");
+  if (from) oneOffQuery = oneOffQuery.gte("task_date", from);
+  if (to) oneOffQuery = oneOffQuery.lte("task_date", to);
+  const { data: oneOff, error: oneOffErr } = await oneOffQuery;
+  if (oneOffErr)
+    return NextResponse.json({ error: oneOffErr.message }, { status: 400 });
 
-  if (from) query = query.gte("task_date", from);
-  if (to) query = query.lte("task_date", to);
+  // Tareas recurrentes que podrían tener instancias en el rango.
+  // - Empezaron antes de "to" (su anchor <= to)
+  // - Y o no tienen recurrence_until, o ese hasta >= from
+  let recQuery = supabase
+    .from("tasks")
+    .select(TASK_SELECT)
+    .neq("recurrence_type", "none");
+  if (to) recQuery = recQuery.lte("task_date", to);
+  if (from)
+    recQuery = recQuery.or(
+      `recurrence_until.is.null,recurrence_until.gte.${from}`
+    );
+  const { data: recurring, error: recErr } = await recQuery;
+  if (recErr)
+    return NextResponse.json({ error: recErr.message }, { status: 400 });
 
-  const { data, error } = await query;
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
-  return NextResponse.json({ tasks: data });
+  // El cliente expande las recurrencias (ver src/lib/recurrence.ts).
+  return NextResponse.json({ tasks: [...(oneOff || []), ...(recurring || [])] });
 }
 
 // POST /api/tasks
@@ -49,6 +66,8 @@ export async function POST(request: NextRequest) {
     priority = "medium",
     tags = [],
     assigned_to = null,
+    recurrence_type = "none",
+    recurrence_until = null,
   } = body || {};
 
   if (!title || !task_date) {
@@ -69,13 +88,11 @@ export async function POST(request: NextRequest) {
       priority,
       tags,
       assigned_to,
+      recurrence_type,
+      recurrence_until,
       created_by: user.id,
     })
-    .select(
-      `*,
-       assignee:profiles!tasks_assigned_to_fkey(id, display_name, color, email),
-       creator:profiles!tasks_created_by_fkey(id, display_name, color, email)`
-    )
+    .select(TASK_SELECT)
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });

@@ -1,6 +1,7 @@
 "use client";
 
 import type { Task } from "@/lib/types";
+import { getContrastingTextColor, getInitials } from "@/lib/utils";
 import {
   addDays,
   endOfMonth,
@@ -33,11 +34,15 @@ const STATUS_OPACITY: Record<string, string> = {
   todo: "",
 };
 
-export default function CalendarMonth({ month, tasks, onDayClick, onTaskClick }: Props) {
+export default function CalendarMonth({
+  month,
+  tasks,
+  onDayClick,
+  onTaskClick,
+}: Props) {
   const start = startOfWeek(startOfMonth(month), { weekStartsOn: 1 });
   const end = endOfWeek(endOfMonth(month), { weekStartsOn: 1 });
 
-  // Build day grid (siempre 6 filas x 7 cols = 42 días)
   const days: Date[] = [];
   let d = start;
   while (d <= end) {
@@ -51,15 +56,13 @@ export default function CalendarMonth({ month, tasks, onDayClick, onTaskClick }:
   const weekDays = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"];
 
   function tasksForDay(day: Date) {
-    return tasks.filter((t) => {
-      const td = new Date(t.task_date + "T00:00:00");
-      return isSameDay(td, day);
-    });
+    return tasks.filter((t) =>
+      isSameDay(new Date(t.task_date + "T00:00:00"), day)
+    );
   }
 
   return (
     <div className="card">
-      {/* Header de días */}
       <div className="grid grid-cols-7 border-b border-border-soft">
         {weekDays.map((d) => (
           <div
@@ -71,7 +74,6 @@ export default function CalendarMonth({ month, tasks, onDayClick, onTaskClick }:
         ))}
       </div>
 
-      {/* Grilla */}
       <div className="grid grid-cols-7 grid-rows-6">
         {days.map((day, i) => {
           const inMonth = isSameMonth(day, month);
@@ -94,7 +96,11 @@ export default function CalendarMonth({ month, tasks, onDayClick, onTaskClick }:
                   className={`
                     text-[12px] font-medium leading-none
                     ${!inMonth ? "text-ink-muted" : "text-ink-soft"}
-                    ${isToday(day) ? "bg-ink text-white rounded-full w-6 h-6 flex items-center justify-center font-semibold" : ""}
+                    ${
+                      isToday(day)
+                        ? "bg-ink text-white rounded-full w-6 h-6 flex items-center justify-center font-semibold"
+                        : ""
+                    }
                   `}
                 >
                   {format(day, "d", { locale: es })}
@@ -106,35 +112,63 @@ export default function CalendarMonth({ month, tasks, onDayClick, onTaskClick }:
                 )}
               </div>
               <div className="space-y-1">
-                {dayTasks.slice(0, 3).map((t) => (
-                  <button
-                    key={t.id}
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onTaskClick(t);
-                    }}
-                    className={`
-                      w-full text-left text-[11px] leading-tight px-1.5 py-1 rounded
-                      bg-white border-l-2 ${PRIORITY_BORDER[t.priority]}
-                      border border-border-soft hover:border-ink-soft transition-colors
-                      truncate ${STATUS_OPACITY[t.status]}
-                    `}
-                    style={
-                      t.assignee
-                        ? { backgroundColor: `${t.assignee.color}12` }
-                        : undefined
-                    }
-                    title={t.title}
-                  >
-                    {t.task_time && (
-                      <span className="text-ink-muted mr-1 font-medium">
-                        {t.task_time.slice(0, 5)}
-                      </span>
-                    )}
-                    <span className="font-medium text-ink">{t.title}</span>
-                  </button>
-                ))}
+                {dayTasks.slice(0, 3).map((t) => {
+                  const isRecurring =
+                    t.recurrence_type && t.recurrence_type !== "none";
+                  return (
+                    <button
+                      key={`${t.id}-${t.task_date}`}
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onTaskClick(t);
+                      }}
+                      className={`
+                        w-full text-left text-[11px] leading-tight px-1.5 py-1 rounded
+                        bg-white border-l-2 ${PRIORITY_BORDER[t.priority]}
+                        border border-border-soft hover:border-ink-soft transition-colors
+                        ${STATUS_OPACITY[t.status]}
+                      `}
+                      style={
+                        t.assignee
+                          ? { backgroundColor: `${t.assignee.color}12` }
+                          : undefined
+                      }
+                      title={
+                        t.assignee
+                          ? `${t.title} · ${t.assignee.display_name}`
+                          : t.title
+                      }
+                    >
+                      <div className="flex items-center gap-1 min-w-0">
+                        {t.assignee && (
+                          <span
+                            className="flex-shrink-0 inline-flex items-center justify-center w-[15px] h-[15px] rounded-full text-[8px] font-bold leading-none"
+                            style={{
+                              backgroundColor: t.assignee.color,
+                              color: getContrastingTextColor(t.assignee.color),
+                            }}
+                          >
+                            {getInitials(t.assignee.display_name)}
+                          </span>
+                        )}
+                        {t.task_time && (
+                          <span className="flex-shrink-0 text-ink-muted font-medium">
+                            {t.task_time.slice(0, 5)}
+                          </span>
+                        )}
+                        {isRecurring && (
+                          <span className="flex-shrink-0 opacity-70 text-[10px]">
+                            🔁
+                          </span>
+                        )}
+                        <span className="font-medium text-ink truncate min-w-0">
+                          {t.title}
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           );

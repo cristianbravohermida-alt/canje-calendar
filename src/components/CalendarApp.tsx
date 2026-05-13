@@ -15,6 +15,7 @@ import {
 import { es } from "date-fns/locale";
 import { createClient } from "@/lib/supabase/client";
 import type { Profile, Task } from "@/lib/types";
+import { expandAllTasks } from "@/lib/recurrence";
 import CalendarMonth from "./CalendarMonth";
 import CalendarWeek from "./CalendarWeek";
 import TaskModal from "./TaskModal";
@@ -30,18 +31,18 @@ export default function CalendarApp({ currentUser }: Props) {
   const supabase = createClient();
 
   const [view, setView] = useState<ViewMode>("month");
-  const [cursor, setCursor] = useState<Date>(new Date()); // mes/semana actualmente visible
+  const [cursor, setCursor] = useState<Date>(new Date());
   const [tasks, setTasks] = useState<Task[]>([]);
   const [users, setUsers] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Modal state
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Task | null>(null);
   const [initialDate, setInitialDate] = useState<string | undefined>(undefined);
 
-  // Filtros
-  const [filterAssignee, setFilterAssignee] = useState<string | "all" | "mine">("all");
+  const [filterAssignee, setFilterAssignee] = useState<string | "all" | "mine">(
+    "all"
+  );
 
   const range = useMemo(() => {
     if (view === "month") {
@@ -79,12 +80,20 @@ export default function CalendarApp({ currentUser }: Props) {
     loadUsers();
   }, [loadUsers]);
 
+  // 1) Filtrar por asignado
   const filteredTasks = useMemo(() => {
     if (filterAssignee === "all") return tasks;
     if (filterAssignee === "mine")
       return tasks.filter((t) => t.assigned_to === currentUser.id);
     return tasks.filter((t) => t.assigned_to === filterAssignee);
   }, [tasks, filterAssignee, currentUser.id]);
+
+  // 2) Expandir recurrencias dentro del rango visible
+  const expandedTasks = useMemo(() => {
+    const rangeStart = new Date(range.from + "T00:00:00");
+    const rangeEnd = new Date(range.to + "T23:59:59");
+    return expandAllTasks(filteredTasks, rangeStart, rangeEnd);
+  }, [filteredTasks, range.from, range.to]);
 
   function handlePrev() {
     setCursor(view === "month" ? subMonths(cursor, 1) : addDays(cursor, -7));
@@ -141,14 +150,21 @@ export default function CalendarApp({ currentUser }: Props) {
           const e = addDays(s, 6);
           const sameMonth = s.getMonth() === e.getMonth();
           if (sameMonth) {
-            return `${format(s, "d", { locale: es })} – ${format(e, "d 'de' MMMM yyyy", { locale: es })}`;
+            return `${format(s, "d", { locale: es })} – ${format(
+              e,
+              "d 'de' MMMM yyyy",
+              { locale: es }
+            )}`;
           }
-          return `${format(s, "d MMM", { locale: es })} – ${format(e, "d MMM yyyy", { locale: es })}`;
+          return `${format(s, "d MMM", { locale: es })} – ${format(
+            e,
+            "d MMM yyyy",
+            { locale: es }
+          )}`;
         })();
 
   return (
     <main className="max-w-[1280px] mx-auto px-6 py-8 pb-20">
-      {/* Top bar */}
       <header className="mb-6">
         <div className="flex items-start justify-between gap-4 mb-4 flex-wrap">
           <div>
@@ -161,7 +177,10 @@ export default function CalendarApp({ currentUser }: Props) {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={handleNewTask} className="btn btn-primary py-2 px-4">
+            <button
+              onClick={handleNewTask}
+              className="btn btn-primary py-2 px-4"
+            >
               + Nueva tarea
             </button>
             <button onClick={handleLogout} className="btn py-2">
@@ -170,9 +189,7 @@ export default function CalendarApp({ currentUser }: Props) {
           </div>
         </div>
 
-        {/* Controles: vista, navegación, filtro */}
         <div className="flex items-center gap-3 flex-wrap">
-          {/* Vista toggle */}
           <div className="flex gap-1.5">
             <button
               onClick={() => setView("month")}
@@ -188,15 +205,22 @@ export default function CalendarApp({ currentUser }: Props) {
             </button>
           </div>
 
-          {/* Navegación */}
           <div className="flex items-center gap-1">
-            <button onClick={handlePrev} className="btn px-3 py-1.5" aria-label="Anterior">
+            <button
+              onClick={handlePrev}
+              className="btn px-3 py-1.5"
+              aria-label="Anterior"
+            >
               ‹
             </button>
             <button onClick={handleToday} className="btn px-3 py-1.5">
               Hoy
             </button>
-            <button onClick={handleNext} className="btn px-3 py-1.5" aria-label="Siguiente">
+            <button
+              onClick={handleNext}
+              className="btn px-3 py-1.5"
+              aria-label="Siguiente"
+            >
               ›
             </button>
           </div>
@@ -205,7 +229,6 @@ export default function CalendarApp({ currentUser }: Props) {
             {headerLabel}
           </div>
 
-          {/* Filtro de asignado */}
           <div className="ml-auto flex items-center gap-2">
             <span className="text-[11.5px] uppercase tracking-wider text-ink-muted font-semibold">
               Asignado:
@@ -230,24 +253,22 @@ export default function CalendarApp({ currentUser }: Props) {
         </div>
       </header>
 
-      {/* Vista del calendario */}
       {view === "month" ? (
         <CalendarMonth
           month={cursor}
-          tasks={filteredTasks}
+          tasks={expandedTasks}
           onDayClick={handleDayClick}
           onTaskClick={handleTaskClick}
         />
       ) : (
         <CalendarWeek
           weekStart={cursor}
-          tasks={filteredTasks}
+          tasks={expandedTasks}
           onDayClick={handleDayClick}
           onTaskClick={handleTaskClick}
         />
       )}
 
-      {/* Leyenda */}
       <div className="mt-6 flex items-center gap-4 flex-wrap text-[12px] text-ink-soft">
         <span className="font-semibold uppercase tracking-wider text-[11px] text-ink-muted">
           Prioridad:
@@ -263,7 +284,7 @@ export default function CalendarApp({ currentUser }: Props) {
         </span>
         <span className="text-ink-muted">·</span>
         <span className="text-ink-muted">
-          El color de fondo de cada tarea corresponde al asignado.
+          🔁 = tarea recurrente · el color de fondo corresponde al asignado.
         </span>
       </div>
 

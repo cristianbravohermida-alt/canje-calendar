@@ -1,7 +1,16 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { Profile, Task, TaskPriority, TaskStatus } from "@/lib/types";
+import { format } from "date-fns";
+import { es } from "date-fns/locale";
+import type {
+  Profile,
+  RecurrenceType,
+  Task,
+  TaskPriority,
+  TaskStatus,
+} from "@/lib/types";
+import DateInput from "./DateInput";
 
 interface Props {
   open: boolean;
@@ -10,7 +19,6 @@ interface Props {
   onDeleted?: (id: string) => void;
   users: Profile[];
   currentUserId: string;
-  // Si viene editing, edita; si viene initialDate y NO editing, crea
   editing?: Task | null;
   initialDate?: string;
 }
@@ -26,8 +34,43 @@ const STATUSES: { v: TaskStatus; label: string }[] = [
   { v: "done", label: "Lista" },
 ];
 
+const NTH_LABELS = ["primer", "segundo", "tercer", "cuarto", "quinto"];
+
+function buildRecurrenceOptions(
+  dateStr: string
+): { v: RecurrenceType; label: string }[] {
+  const base: { v: RecurrenceType; label: string }[] = [
+    { v: "none", label: "No se repite" },
+    { v: "daily", label: "Todos los días" },
+    { v: "weekdays", label: "Todos los días hábiles (lun–vie)" },
+  ];
+  if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return base;
+  const d = new Date(dateStr + "T00:00:00");
+  const weekday = format(d, "EEEE", { locale: es });
+  const dayOfMonth = d.getDate();
+  const nthIndex = Math.floor((dayOfMonth - 1) / 7);
+  const nthLabel = NTH_LABELS[nthIndex] || `${nthIndex + 1}º`;
+  const monthName = format(d, "MMMM", { locale: es });
+  return [
+    ...base,
+    { v: "weekly", label: `Cada semana, el ${weekday}` },
+    {
+      v: "monthly_nth_weekday",
+      label: `Todos los meses, el ${nthLabel} ${weekday}`,
+    },
+    { v: "yearly", label: `Anualmente, el ${dayOfMonth} de ${monthName}` },
+  ];
+}
+
 export default function TaskModal({
-  open, onClose, onSaved, onDeleted, users, currentUserId, editing, initialDate,
+  open,
+  onClose,
+  onSaved,
+  onDeleted,
+  users,
+  currentUserId,
+  editing,
+  initialDate,
 }: Props) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -37,6 +80,8 @@ export default function TaskModal({
   const [priority, setPriority] = useState<TaskPriority>("medium");
   const [tagsInput, setTagsInput] = useState("");
   const [assignedTo, setAssignedTo] = useState<string>("");
+  const [recurrenceType, setRecurrenceType] = useState<RecurrenceType>("none");
+  const [recurrenceUntil, setRecurrenceUntil] = useState<string>("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -45,12 +90,15 @@ export default function TaskModal({
     if (editing) {
       setTitle(editing.title);
       setDescription(editing.description || "");
-      setTaskDate(editing.task_date);
+      // En recurrentes, mostrar la fecha original de la serie, no la fecha de la instancia clickeada
+      setTaskDate(editing.series_anchor_date || editing.task_date);
       setTaskTime(editing.task_time ? editing.task_time.slice(0, 5) : "");
       setStatus(editing.status);
       setPriority(editing.priority);
       setTagsInput((editing.tags || []).join(", "));
       setAssignedTo(editing.assigned_to || "");
+      setRecurrenceType(editing.recurrence_type || "none");
+      setRecurrenceUntil(editing.recurrence_until || "");
     } else {
       setTitle("");
       setDescription("");
@@ -60,6 +108,8 @@ export default function TaskModal({
       setPriority("medium");
       setTagsInput("");
       setAssignedTo(currentUserId);
+      setRecurrenceType("none");
+      setRecurrenceUntil("");
     }
     setError(null);
   }, [open, editing, initialDate, currentUserId]);
@@ -82,6 +132,9 @@ export default function TaskModal({
       priority,
       tags,
       assigned_to: assignedTo || null,
+      recurrence_type: recurrenceType,
+      recurrence_until:
+        recurrenceType !== "none" && recurrenceUntil ? recurrenceUntil : null,
     };
     try {
       const url = editing ? `/api/tasks/${editing.id}` : "/api/tasks";
@@ -104,7 +157,12 @@ export default function TaskModal({
 
   async function handleDelete() {
     if (!editing) return;
-    if (!confirm("¿Eliminar esta tarea? No se puede deshacer.")) return;
+    const wasRecurring =
+      editing.recurrence_type && editing.recurrence_type !== "none";
+    const msg = wasRecurring
+      ? "¿Eliminar esta tarea recurrente?\n\nSe borrarán TODAS las repeticiones (pasadas y futuras). No se puede deshacer."
+      : "¿Eliminar esta tarea? No se puede deshacer.";
+    if (!confirm(msg)) return;
     setSaving(true);
     setError(null);
     try {
@@ -121,6 +179,11 @@ export default function TaskModal({
   }
 
   if (!open) return null;
+
+  const recurrenceOptions = buildRecurrenceOptions(taskDate);
+  const isRecurring = recurrenceType !== "none";
+  const wasEditingRecurring =
+    !!editing && !!editing.recurrence_type && editing.recurrence_type !== "none";
 
   return (
     <div
@@ -146,6 +209,12 @@ export default function TaskModal({
         </div>
 
         <form onSubmit={handleSave} className="p-6 space-y-4">
+          {wasEditingRecurring && (
+            <div className="rounded-lg bg-[#fbeed2] border border-[#e8dcb5] px-3.5 py-2.5 text-[12.5px] text-[#8a5f0e] leading-snug">
+              🔁 Esta tarea se repite. Los cambios afectarán toda la serie.
+            </div>
+          )}
+
           <div>
             <label className="label" htmlFor="title">
               Título *
@@ -181,18 +250,19 @@ export default function TaskModal({
               <label className="label" htmlFor="date">
                 Fecha *
               </label>
-              <input
+              <DateInput
                 id="date"
-                type="date"
                 required
-                className="input"
                 value={taskDate}
-                onChange={(e) => setTaskDate(e.target.value)}
+                onChange={setTaskDate}
               />
             </div>
             <div>
               <label className="label" htmlFor="time">
-                Hora <span className="font-normal text-ink-muted normal-case tracking-normal">(opcional)</span>
+                Hora{" "}
+                <span className="font-normal text-ink-muted normal-case tracking-normal">
+                  (opcional)
+                </span>
               </label>
               <input
                 id="time"
@@ -204,6 +274,43 @@ export default function TaskModal({
             </div>
           </div>
 
+          <div>
+            <label className="label" htmlFor="recurrence">
+              🔁 Repetición
+            </label>
+            <select
+              id="recurrence"
+              className="input cursor-pointer"
+              value={recurrenceType}
+              onChange={(e) =>
+                setRecurrenceType(e.target.value as RecurrenceType)
+              }
+            >
+              {recurrenceOptions.map((opt) => (
+                <option key={opt.v} value={opt.v}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {isRecurring && (
+            <div>
+              <label className="label" htmlFor="until">
+                Repetir hasta{" "}
+                <span className="font-normal text-ink-muted normal-case tracking-normal">
+                  (opcional · vacío = sin fin)
+                </span>
+              </label>
+              <DateInput
+                id="until"
+                value={recurrenceUntil}
+                onChange={setRecurrenceUntil}
+                min={taskDate}
+              />
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-3">
             <div>
               <span className="label">Estado</span>
@@ -213,7 +320,9 @@ export default function TaskModal({
                     type="button"
                     key={s.v}
                     onClick={() => setStatus(s.v)}
-                    className={`pill ${status === s.v ? "active" : ""} text-[12px] px-3 py-1`}
+                    className={`pill ${
+                      status === s.v ? "active" : ""
+                    } text-[12px] px-3 py-1`}
                   >
                     {s.label}
                   </button>
@@ -228,7 +337,9 @@ export default function TaskModal({
                     type="button"
                     key={p.v}
                     onClick={() => setPriority(p.v)}
-                    className={`pill ${priority === p.v ? "active" : ""} text-[12px] px-3 py-1`}
+                    className={`pill ${
+                      priority === p.v ? "active" : ""
+                    } text-[12px] px-3 py-1`}
                   >
                     {p.label}
                   </button>
@@ -258,7 +369,10 @@ export default function TaskModal({
 
           <div>
             <label className="label" htmlFor="tags">
-              Etiquetas <span className="font-normal text-ink-muted normal-case tracking-normal">(separadas por coma)</span>
+              Etiquetas{" "}
+              <span className="font-normal text-ink-muted normal-case tracking-normal">
+                (separadas por coma)
+              </span>
             </label>
             <input
               id="tags"
@@ -282,7 +396,13 @@ export default function TaskModal({
               disabled={saving}
               className="btn btn-primary flex-1 justify-center py-2.5"
             >
-              {saving ? <span className="spinner"></span> : editing ? "Guardar cambios" : "Crear tarea"}
+              {saving ? (
+                <span className="spinner"></span>
+              ) : editing ? (
+                "Guardar cambios"
+              ) : (
+                "Crear tarea"
+              )}
             </button>
             {editing && (
               <button

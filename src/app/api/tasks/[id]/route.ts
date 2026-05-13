@@ -1,6 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
+const TASK_SELECT = `*,
+  assignee:profiles!tasks_assigned_to_fkey(id, display_name, color, email),
+  creator:profiles!tasks_created_by_fkey(id, display_name, color, email)`;
+
 // PATCH /api/tasks/[id]
 export async function PATCH(
   request: NextRequest,
@@ -23,6 +27,8 @@ export async function PATCH(
     "priority",
     "tags",
     "assigned_to",
+    "recurrence_type",
+    "recurrence_until",
   ];
   const patch: Record<string, unknown> = {};
   for (const k of allowed) {
@@ -33,11 +39,7 @@ export async function PATCH(
     .from("tasks")
     .update(patch)
     .eq("id", id)
-    .select(
-      `*,
-       assignee:profiles!tasks_assigned_to_fkey(id, display_name, color, email),
-       creator:profiles!tasks_created_by_fkey(id, display_name, color, email)`
-    )
+    .select(TASK_SELECT)
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
