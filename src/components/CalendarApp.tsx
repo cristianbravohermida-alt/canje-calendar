@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   addDays,
@@ -22,8 +22,21 @@ import TaskModal from "./TaskModal";
 
 type ViewMode = "month" | "week";
 
+// Cada cuánto se refresca solo el calendario (10 minutos)
+const AUTO_REFRESH_MS = 10 * 60 * 1000;
+// Si vuelves a la pestaña y los datos tienen más de esto, refresca
+const STALE_MS = 60 * 1000;
+
 interface Props {
   currentUser: Profile;
+}
+
+function formatRelativeTime(date: Date): string {
+  const diff = (Date.now() - date.getTime()) / 1000;
+  if (diff < 60) return "recién";
+  if (diff < 3600) return `hace ${Math.floor(diff / 60)} min`;
+  if (diff < 86400) return `hace ${Math.floor(diff / 3600)} h`;
+  return date.toLocaleDateString("es-CL");
 }
 
 export default function CalendarApp({ currentUser }: Props) {
@@ -35,6 +48,7 @@ export default function CalendarApp({ currentUser }: Props) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [users, setUsers] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
+  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Task | null>(null);
@@ -43,6 +57,16 @@ export default function CalendarApp({ currentUser }: Props) {
   const [filterAssignee, setFilterAssignee] = useState<string | "all" | "mine">(
     "all"
   );
+
+  // Tick para refrescar el texto "hace X min" cada 30s sin recargar datos
+  const [, setNowTick] = useState(0);
+
+  // Guardamos lastUpdate en un ref para que el handler de visibilidad
+  // siempre vea el valor más reciente sin re-suscribirse en cada cambio.
+  const lastUpdateRef = useRef<Date | null>(null);
+  useEffect(() => {
+    lastUpdateRef.current = lastUpdate;
+  }, [lastUpdate]);
 
   const range = useMemo(() => {
     if (view === "month") {
@@ -60,7 +84,10 @@ export default function CalendarApp({ currentUser }: Props) {
     try {
       const res = await fetch(`/api/tasks?from=${range.from}&to=${range.to}`);
       const data = await res.json();
-      if (res.ok) setTasks(data.tasks || []);
+      if (res.ok) {
+        setTasks(data.tasks || []);
+        setLastUpdate(new Date());
+      }
     } finally {
       setLoading(false);
     }
@@ -79,6 +106,37 @@ export default function CalendarApp({ currentUser }: Props) {
   useEffect(() => {
     loadUsers();
   }, [loadUsers]);
+
+  // Auto-refresco cada 10 min — sólo si la pestaña está visible,
+  // para no gastar llamadas a la API en segundo plano.
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (document.visibilityState === "visible") {
+        loadTasks();
+      }
+    }, AUTO_REFRESH_MS);
+    return () => clearInterval(interval);
+  }, [loadTasks]);
+
+  // Al volver a la pestaña, refrescar si los datos están viejos
+  useEffect(() => {
+    function onVisibilityChange() {
+      if (document.visibilityState !== "visible") return;
+      const last = lastUpdateRef.current;
+      if (!last || Date.now() - last.getTime() > STALE_MS) {
+        loadTasks();
+      }
+    }
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () =>
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, [loadTasks]);
+
+  // Refrescar el texto "hace X min" cada 30s
+  useEffect(() => {
+    const t = setInterval(() => setNowTick((n) => n + 1), 30_000);
+    return () => clearInterval(t);
+  }, []);
 
   // 1) Filtrar por asignado
   const filteredTasks = useMemo(() => {
@@ -230,6 +288,30 @@ export default function CalendarApp({ currentUser }: Props) {
           </div>
 
           <div className="ml-auto flex items-center gap-2">
+            {/* Botón refrescar + indicador de última actualización */}
+            <button
+              onClick={loadTasks}
+              disabled={loading}
+              className="btn px-3 py-1.5"
+              title="Refrescar ahora"
+              aria-label="Refrescar"
+            >
+              <span
+                className={`inline-block text-[14px] leading-none ${
+                  loading ? "animate-spin" : ""
+                }`}
+              >
+                ↻
+              </span>
+            </button>
+            {lastUpdate && (
+              <span className="text-[11.5px] text-ink-muted whitespace-nowrap">
+                {loading ? "actualizando…" : `actualizado ${formatRelativeTime(lastUpdate)}`}
+              </span>
+            )}
+
+            <span className="text-ink-muted">·</span>
+
             <span className="text-[11.5px] uppercase tracking-wider text-ink-muted font-semibold">
               Asignado:
             </span>
@@ -248,7 +330,6 @@ export default function CalendarApp({ currentUser }: Props) {
                 ))}
               </optgroup>
             </select>
-            {loading && <span className="spinner"></span>}
           </div>
         </div>
       </header>
