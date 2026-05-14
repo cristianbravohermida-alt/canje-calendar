@@ -6,6 +6,8 @@ const TASK_SELECT = `*,
   creator:profiles!tasks_created_by_fkey(id, display_name, color, email)`;
 
 // GET /api/tasks?from=YYYY-MM-DD&to=YYYY-MM-DD
+// Devuelve { tasks, exceptions } — el cliente expande las recurrencias
+// y aplica las excepciones de estado por instancia.
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
   const {
@@ -28,11 +30,7 @@ export async function GET(request: NextRequest) {
   if (oneOffErr)
     return NextResponse.json({ error: oneOffErr.message }, { status: 400 });
 
-  // Tareas recurrentes que pueden tener instancias en el rango.
-  // Filtramos por anchor <= to. El "until" sólo aplica a presets simples;
-  // las custom con endType=count terminan por número de ocurrencias, lo
-  // cual sólo se sabe en el cliente al expandir. Por eso traemos todas
-  // las recurrentes que cumplen anchor<=to y dejamos que el cliente decida.
+  // Tareas recurrentes que pueden tener instancias en el rango
   let recQuery = supabase
     .from("tasks")
     .select(TASK_SELECT)
@@ -46,7 +44,18 @@ export async function GET(request: NextRequest) {
   if (recErr)
     return NextResponse.json({ error: recErr.message }, { status: 400 });
 
-  return NextResponse.json({ tasks: [...(oneOff || []), ...(recurring || [])] });
+  // Excepciones de instancia dentro del rango visible
+  let exQuery = supabase.from("task_exceptions").select("*");
+  if (from) exQuery = exQuery.gte("exception_date", from);
+  if (to) exQuery = exQuery.lte("exception_date", to);
+  const { data: exceptions, error: exErr } = await exQuery;
+  if (exErr)
+    return NextResponse.json({ error: exErr.message }, { status: 400 });
+
+  return NextResponse.json({
+    tasks: [...(oneOff || []), ...(recurring || [])],
+    exceptions: exceptions || [],
+  });
 }
 
 // POST /api/tasks

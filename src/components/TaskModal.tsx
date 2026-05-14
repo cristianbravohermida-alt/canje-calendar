@@ -8,6 +8,7 @@ import type {
   Profile,
   RecurrenceType,
   Task,
+  TaskException,
   TaskPriority,
   TaskStatus,
 } from "@/lib/types";
@@ -20,6 +21,7 @@ interface Props {
   onClose: () => void;
   onSaved: (task: Task) => void;
   onDeleted?: (id: string) => void;
+  onExceptionSaved?: (exception: TaskException) => void;
   users: Profile[];
   currentUserId: string;
   editing?: Task | null;
@@ -73,6 +75,7 @@ export default function TaskModal({
   onClose,
   onSaved,
   onDeleted,
+  onExceptionSaved,
   users,
   currentUserId,
   editing,
@@ -149,7 +152,6 @@ export default function TaskModal({
 
   function handleRecurrenceChange(value: string) {
     if (value === "custom") {
-      // Si ya estaba en custom, sólo reabrir el modal para editar
       setPreviousType(recurrenceType);
       setRecurrenceType("custom");
       setShowCustomModal(true);
@@ -168,36 +170,41 @@ export default function TaskModal({
 
   function handleCustomCancel() {
     setShowCustomModal(false);
-    // Si veníamos de otro tipo y no hay config, revertir
     if (previousType !== null && previousType !== "custom" && !customConfig) {
       setRecurrenceType(previousType);
     }
     setPreviousType(null);
   }
 
-  async function handleSave(e: React.FormEvent) {
-    e.preventDefault();
-    if (!title.trim()) return;
+  // ¿Cambió algún campo que NO sea el estado? (para tareas recurrentes,
+  // esos cambios van a la serie completa; el estado va a la instancia)
+  function nonStatusFieldsChanged(): boolean {
+    if (!editing) return false;
+    const baseDate = editing.series_anchor_date || editing.task_date;
+    const baseTime = editing.task_time ? editing.task_time.slice(0, 5) : "";
+    const baseTags = (editing.tags || []).join(", ");
+    return (
+      title.trim() !== editing.title ||
+      (description.trim() || "") !== (editing.description || "") ||
+      taskDate !== baseDate ||
+      taskTime !== baseTime ||
+      priority !== editing.priority ||
+      tagsInput.trim() !== baseTags ||
+      (assignedTo || "") !== (editing.assigned_to || "") ||
+      recurrenceType !== editing.recurrence_type
+    );
+  }
 
-    // Validación: si es custom, debe tener config
-    if (recurrenceType === "custom" && !customConfig) {
-      setError("Configura la recurrencia personalizada antes de guardar.");
-      return;
-    }
-
-    setSaving(true);
-    setError(null);
+  function buildTaskPayload(includeStatus: boolean): Record<string, unknown> {
     const tags = tagsInput
       .split(",")
       .map((t) => t.trim())
       .filter(Boolean);
-
     const payload: Record<string, unknown> = {
       title: title.trim(),
       description: description.trim() || null,
       task_date: taskDate,
       task_time: taskTime ? `${taskTime}:00` : null,
-      status,
       priority,
       tags,
       assigned_to: assignedTo || null,
@@ -208,7 +215,7 @@ export default function TaskModal({
       recurrence_weekdays: null,
       recurrence_count: null,
     };
-
+    if (includeStatus) payload.status = status;
     if (recurrenceType !== "none") {
       if (recurrenceType === "custom" && customConfig) {
         payload.recurrence_interval = customConfig.interval;
@@ -225,14 +232,74 @@ export default function TaskModal({
         payload.recurrence_until = recurrenceUntil;
       }
     }
+    return payload;
+  }
+
+  async function handleSave(e: React.FormEvent) {
+    e.preventDefault();
+    if (!title.trim()) return;
+    if (recurrenceType === "custom" && !customConfig) {
+      setError("Configura la recurrencia personalizada antes de guardar.");
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
 
     try {
+      const isRecurringInstance = !!editing?.is_recurring_instance;
+
+      if (isRecurringInstance && editing) {
+        // Tarea recurrente: el ESTADO va a una excepción de instancia,
+        // el resto de los campos van a la serie completa.
+        const statusChanged = status !== editing.status;
+        const otherChanged = nonStatusFieldsChanged();
+
+        let savedTask: Task | null = null;
+        let savedException: TaskException | null = null;
+
+        if (otherChanged) {
+          // PATCH a la serie SIN el estado (el estado se maneja por instancia)
+          const res = await fetch(`/api/tasks/${editing.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(buildTaskPayload(false)),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "Error al guardar la serie");
+          savedTask = data.task;
+        }
+
+        if (statusChanged) {
+          // Excepción de estado solo para esta fecha
+          const res = await fetch("/api/task-exceptions", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              task_id: editing.id,
+              exception_date: editing.task_date, // fecha de ESTA instancia
+              status,
+            }),
+          });
+          const data = await res.json();
+          if (!res.ok)
+            throw new Error(data.error || "Error al guardar el estado");
+          savedException = data.exception;
+        }
+
+        if (savedTask) onSaved(savedTask);
+        if (savedException) onExceptionSaved?.(savedException);
+        onClose();
+        return;
+      }
+
+      // Tarea normal (no recurrente) o creación nueva
       const url = editing ? `/api/tasks/${editing.id}` : "/api/tasks";
       const method = editing ? "PATCH" : "POST";
       const res = await fetch(url, {
         method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(buildTaskPayload(true)),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Error al guardar");
@@ -273,8 +340,7 @@ export default function TaskModal({
   const recurrenceOptions = buildRecurrenceOptions(taskDate);
   const isRecurringPreset =
     recurrenceType !== "none" && recurrenceType !== "custom";
-  const wasEditingRecurring =
-    !!editing && !!editing.recurrence_type && editing.recurrence_type !== "none";
+  const isEditingRecurringInstance = !!editing?.is_recurring_instance;
 
   return (
     <>
@@ -301,9 +367,11 @@ export default function TaskModal({
           </div>
 
           <form onSubmit={handleSave} className="p-6 space-y-4">
-            {wasEditingRecurring && (
+            {isEditingRecurringInstance && (
               <div className="rounded-lg bg-[#fbeed2] border border-[#e8dcb5] px-3.5 py-2.5 text-[12.5px] text-[#8a5f0e] leading-snug">
-                🔁 Esta tarea se repite. Los cambios afectarán toda la serie.
+                🔁 Tarea recurrente. El <strong>estado</strong> (Pendiente / En
+                curso / Lista) se aplica solo a esta fecha. Cualquier otro
+                cambio afecta toda la serie.
               </div>
             )}
 
@@ -383,7 +451,6 @@ export default function TaskModal({
                 ))}
               </select>
 
-              {/* Resumen + editar para custom */}
               {recurrenceType === "custom" && customConfig && (
                 <div className="mt-1.5 flex items-center justify-between gap-2 text-[12.5px] text-ink-soft">
                   <span className="truncate">
@@ -400,7 +467,6 @@ export default function TaskModal({
               )}
             </div>
 
-            {/* "Repetir hasta" sólo para presets, no para custom (custom ya tiene su propio fin) */}
             {isRecurringPreset && (
               <div>
                 <label className="label" htmlFor="until">
@@ -420,7 +486,15 @@ export default function TaskModal({
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <span className="label">Estado</span>
+                <span className="label">
+                  Estado
+                  {isEditingRecurringInstance && (
+                    <span className="font-normal text-ink-muted normal-case tracking-normal">
+                      {" "}
+                      (solo esta fecha)
+                    </span>
+                  )}
+                </span>
                 <div className="flex flex-wrap gap-1.5">
                   {STATUSES.map((s) => (
                     <button

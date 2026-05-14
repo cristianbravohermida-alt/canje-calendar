@@ -8,7 +8,7 @@ import {
   startOfMonth,
   startOfWeek,
 } from "date-fns";
-import type { Task } from "./types";
+import type { Task, TaskException } from "./types";
 
 function parseLocalDate(iso: string): Date {
   return new Date(iso + "T00:00:00");
@@ -35,10 +35,16 @@ function nthWeekdayOfMonth(
 
 /**
  * Expande una tarea en sus instancias dentro de [rangeStart, rangeEnd].
- * Cuenta total de ocurrencias (para `recurrence_count`) se mide desde el anchor,
- * no desde rangeStart, así que las instancias fuera del rango también cuentan.
+ *
+ * exMap: mapa "taskId|YYYY-MM-DD" → TaskException. Si una instancia tiene
+ * una excepción de estado, se aplica solo a esa instancia (no a la serie).
  */
-export function expandTask(task: Task, rangeStart: Date, rangeEnd: Date): Task[] {
+export function expandTask(
+  task: Task,
+  rangeStart: Date,
+  rangeEnd: Date,
+  exMap: Map<string, TaskException>
+): Task[] {
   if (!task.recurrence_type || task.recurrence_type === "none") {
     const d = parseLocalDate(task.task_date);
     return d >= rangeStart && d <= rangeEnd ? [task] : [];
@@ -50,13 +56,21 @@ export function expandTask(task: Task, rangeStart: Date, rangeEnd: Date): Task[]
   const maxCount = task.recurrence_count ?? null;
   const results: Task[] = [];
 
-  const makeInstance = (d: Date): Task => ({
-    ...task,
-    task_date: formatISODate(d),
-    series_anchor_date: task.task_date,
-  });
+  const makeInstance = (d: Date): Task => {
+    const dateStr = formatISODate(d);
+    const ex = exMap.get(`${task.id}|${dateStr}`);
+    const hasStatusOverride = !!(ex && ex.status);
+    return {
+      ...task,
+      task_date: dateStr,
+      series_anchor_date: task.task_date,
+      is_recurring_instance: true,
+      status: hasStatusOverride ? ex!.status! : task.status,
+      has_status_exception: hasStatusOverride,
+    };
+  };
 
-  // Loop genérico paramétrico para recurrencias lineales (anchor + interval × N)
+  // Loop genérico para recurrencias lineales (anchor + interval × N)
   const linearLoop = (advance: (d: Date) => Date) => {
     let cursor = anchor;
     let count = 0;
@@ -121,7 +135,6 @@ export function expandTask(task: Task, rangeStart: Date, rangeEnd: Date): Task[]
       let count = 0;
       while (year <= lastYear) {
         const candidate = new Date(year, m, day);
-        // Saltar 29 feb en años no bisiestos
         if (candidate.getMonth() === m && candidate >= anchor && candidate <= limit) {
           if (maxCount !== null && count >= maxCount) break;
           if (candidate >= rangeStart) results.push(makeInstance(candidate));
@@ -139,9 +152,7 @@ export function expandTask(task: Task, rangeStart: Date, rangeEnd: Date): Task[]
       if (!freq) break;
 
       if (freq === "week" && weekdays.length > 0) {
-        // Semanal con días específicos: iterar por semanas (cada N semanas),
-        // dentro de cada semana visitar los weekdays seleccionados en orden.
-        let weekStart = startOfWeek(anchor, { weekStartsOn: 0 }); // domingo
+        let weekStart = startOfWeek(anchor, { weekStartsOn: 0 });
         const sortedDays = [...weekdays].sort((a, b) => a - b);
         let count = 0;
         let stop = false;
@@ -163,7 +174,6 @@ export function expandTask(task: Task, rangeStart: Date, rangeEnd: Date): Task[]
           weekStart = addDays(weekStart, 7 * interval);
         }
       } else {
-        // Casos lineales: día/semana/mes/año con un intervalo
         const advance = (d: Date): Date => {
           if (freq === "day") return addDays(d, interval);
           if (freq === "week") return addDays(d, 7 * interval);
@@ -179,6 +189,16 @@ export function expandTask(task: Task, rangeStart: Date, rangeEnd: Date): Task[]
   return results;
 }
 
-export function expandAllTasks(tasks: Task[], rangeStart: Date, rangeEnd: Date): Task[] {
-  return tasks.flatMap((t) => expandTask(t, rangeStart, rangeEnd));
+export function expandAllTasks(
+  tasks: Task[],
+  rangeStart: Date,
+  rangeEnd: Date,
+  exceptions: TaskException[] = []
+): Task[] {
+  // Mapa de búsqueda rápida: "taskId|fecha" → excepción
+  const exMap = new Map<string, TaskException>();
+  for (const ex of exceptions) {
+    exMap.set(`${ex.task_id}|${ex.exception_date}`, ex);
+  }
+  return tasks.flatMap((t) => expandTask(t, rangeStart, rangeEnd, exMap));
 }

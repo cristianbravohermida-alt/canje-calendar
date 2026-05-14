@@ -28,6 +28,16 @@ export interface Profile {
   created_at: string;
 }
 
+// Override del estado de UNA instancia de una tarea recurrente.
+export interface TaskException {
+  id: string;
+  task_id: string;
+  exception_date: string; // YYYY-MM-DD, la fecha de la instancia afectada
+  status: TaskStatus | null;
+  created_by: string;
+  created_at: string;
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -49,7 +59,9 @@ export interface Task {
   recurrence_weekdays: number[] | null;
   recurrence_count: number | null;
   // Calculado en cliente al expandir (no viene de la DB)
-  series_anchor_date?: string;
+  series_anchor_date?: string; // fecha original de la serie
+  is_recurring_instance?: boolean; // true si es una instancia expandida
+  has_status_exception?: boolean; // true si esta instancia tiene override de estado
   // Joined desde profiles
   assignee?: Profile | null;
   creator?: Profile | null;

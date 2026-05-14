@@ -14,7 +14,7 @@ import {
 } from "date-fns";
 import { es } from "date-fns/locale";
 import { createClient } from "@/lib/supabase/client";
-import type { Profile, Task } from "@/lib/types";
+import type { Profile, Task, TaskException } from "@/lib/types";
 import { expandAllTasks } from "@/lib/recurrence";
 import CalendarMonth from "./CalendarMonth";
 import CalendarWeek from "./CalendarWeek";
@@ -46,6 +46,7 @@ export default function CalendarApp({ currentUser }: Props) {
   const [view, setView] = useState<ViewMode>("month");
   const [cursor, setCursor] = useState<Date>(new Date());
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [exceptions, setExceptions] = useState<TaskException[]>([]);
   const [users, setUsers] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
@@ -61,8 +62,6 @@ export default function CalendarApp({ currentUser }: Props) {
   // Tick para refrescar el texto "hace X min" cada 30s sin recargar datos
   const [, setNowTick] = useState(0);
 
-  // Guardamos lastUpdate en un ref para que el handler de visibilidad
-  // siempre vea el valor más reciente sin re-suscribirse en cada cambio.
   const lastUpdateRef = useRef<Date | null>(null);
   useEffect(() => {
     lastUpdateRef.current = lastUpdate;
@@ -86,6 +85,7 @@ export default function CalendarApp({ currentUser }: Props) {
       const data = await res.json();
       if (res.ok) {
         setTasks(data.tasks || []);
+        setExceptions(data.exceptions || []);
         setLastUpdate(new Date());
       }
     } finally {
@@ -107,8 +107,7 @@ export default function CalendarApp({ currentUser }: Props) {
     loadUsers();
   }, [loadUsers]);
 
-  // Auto-refresco cada 10 min — sólo si la pestaña está visible,
-  // para no gastar llamadas a la API en segundo plano.
+  // Auto-refresco cada 10 min — sólo con la pestaña visible
   useEffect(() => {
     const interval = setInterval(() => {
       if (document.visibilityState === "visible") {
@@ -146,12 +145,12 @@ export default function CalendarApp({ currentUser }: Props) {
     return tasks.filter((t) => t.assigned_to === filterAssignee);
   }, [tasks, filterAssignee, currentUser.id]);
 
-  // 2) Expandir recurrencias dentro del rango visible
+  // 2) Expandir recurrencias + aplicar excepciones de estado por instancia
   const expandedTasks = useMemo(() => {
     const rangeStart = new Date(range.from + "T00:00:00");
     const rangeEnd = new Date(range.to + "T23:59:59");
-    return expandAllTasks(filteredTasks, rangeStart, rangeEnd);
-  }, [filteredTasks, range.from, range.to]);
+    return expandAllTasks(filteredTasks, rangeStart, rangeEnd, exceptions);
+  }, [filteredTasks, exceptions, range.from, range.to]);
 
   function handlePrev() {
     setCursor(view === "month" ? subMonths(cursor, 1) : addDays(cursor, -7));
@@ -192,6 +191,26 @@ export default function CalendarApp({ currentUser }: Props) {
   }
   function handleDeleted(id: string) {
     setTasks((prev) => prev.filter((t) => t.id !== id));
+    // Las excepciones de esa serie se borran solas en la DB (ON DELETE CASCADE);
+    // las limpiamos también del estado local.
+    setExceptions((prev) => prev.filter((e) => e.task_id !== id));
+  }
+
+  // Una instancia recurrente cambió de estado → guardamos el override local
+  function handleExceptionSaved(exception: TaskException) {
+    setExceptions((prev) => {
+      const idx = prev.findIndex(
+        (e) =>
+          e.task_id === exception.task_id &&
+          e.exception_date === exception.exception_date
+      );
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = exception;
+        return next;
+      }
+      return [...prev, exception];
+    });
   }
 
   async function handleLogout() {
@@ -288,7 +307,6 @@ export default function CalendarApp({ currentUser }: Props) {
           </div>
 
           <div className="ml-auto flex items-center gap-2">
-            {/* Botón refrescar + indicador de última actualización */}
             <button
               onClick={loadTasks}
               disabled={loading}
@@ -306,7 +324,9 @@ export default function CalendarApp({ currentUser }: Props) {
             </button>
             {lastUpdate && (
               <span className="text-[11.5px] text-ink-muted whitespace-nowrap">
-                {loading ? "actualizando…" : `actualizado ${formatRelativeTime(lastUpdate)}`}
+                {loading
+                  ? "actualizando…"
+                  : `actualizado ${formatRelativeTime(lastUpdate)}`}
               </span>
             )}
 
@@ -374,6 +394,7 @@ export default function CalendarApp({ currentUser }: Props) {
         onClose={() => setModalOpen(false)}
         onSaved={handleSaved}
         onDeleted={handleDeleted}
+        onExceptionSaved={handleExceptionSaved}
         users={users}
         currentUserId={currentUser.id}
         editing={editing}
