@@ -8,6 +8,7 @@ import {
   endOfMonth,
   endOfWeek,
   format,
+  isSameDay,
   startOfMonth,
   startOfWeek,
   subMonths,
@@ -19,6 +20,7 @@ import { expandAllTasks } from "@/lib/recurrence";
 import CalendarMonth from "./CalendarMonth";
 import CalendarWeek from "./CalendarWeek";
 import TaskModal from "./TaskModal";
+import DayTasksModal from "./DayTasksModal";
 
 type ViewMode = "month" | "week";
 
@@ -54,6 +56,9 @@ export default function CalendarApp({ currentUser }: Props) {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Task | null>(null);
   const [initialDate, setInitialDate] = useState<string | undefined>(undefined);
+
+  const [dayModalOpen, setDayModalOpen] = useState(false);
+  const [selectedDay, setSelectedDay] = useState<Date | null>(null);
 
   const [filterAssignee, setFilterAssignee] = useState<string | "all" | "mine">(
     "all"
@@ -163,9 +168,8 @@ export default function CalendarApp({ currentUser }: Props) {
   }
 
   function handleDayClick(day: Date) {
-    setEditing(null);
-    setInitialDate(format(day, "yyyy-MM-dd"));
-    setModalOpen(true);
+    setSelectedDay(day);
+    setDayModalOpen(true);
   }
   function handleTaskClick(task: Task) {
     setEditing(task);
@@ -175,6 +179,20 @@ export default function CalendarApp({ currentUser }: Props) {
   function handleNewTask() {
     setEditing(null);
     setInitialDate(format(new Date(), "yyyy-MM-dd"));
+    setModalOpen(true);
+  }
+  // Desde el modal de día: abrir una tarea para editar
+  function handleTaskClickFromDay(task: Task) {
+    setDayModalOpen(false);
+    setEditing(task);
+    setInitialDate(undefined);
+    setModalOpen(true);
+  }
+  // Desde el modal de día: crear una tarea nueva en esa fecha
+  function handleNewTaskFromDay(day: Date) {
+    setDayModalOpen(false);
+    setEditing(null);
+    setInitialDate(format(day, "yyyy-MM-dd"));
     setModalOpen(true);
   }
 
@@ -399,6 +417,24 @@ export default function CalendarApp({ currentUser }: Props) {
         currentUserId={currentUser.id}
         editing={editing}
         initialDate={initialDate}
+      />
+
+      <DayTasksModal
+        open={dayModalOpen}
+        day={selectedDay}
+        tasks={
+          selectedDay
+            ? expandedTasks.filter((t) =>
+                isSameDay(
+                  new Date(t.task_date + "T00:00:00"),
+                  selectedDay
+                )
+              )
+            : []
+        }
+        onClose={() => setDayModalOpen(false)}
+        onTaskClick={handleTaskClickFromDay}
+        onNewTask={handleNewTaskFromDay}
       />
     </main>
   );
