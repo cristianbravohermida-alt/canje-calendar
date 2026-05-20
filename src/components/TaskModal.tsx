@@ -349,10 +349,10 @@ export default function TaskModal({
         onClick={onClose}
       >
         <div
-          className="card w-full max-w-[560px] max-h-[90vh] overflow-y-auto"
+          className="card w-full max-w-[540px] max-h-[92vh] overflow-y-auto"
           onClick={(e) => e.stopPropagation()}
         >
-          <div className="px-6 py-4 border-b border-border-soft flex items-center justify-between">
+          <div className="px-5 py-3 border-b border-border-soft flex items-center justify-between">
             <h2 className="text-[16px] font-semibold">
               {editing ? "Editar tarea" : "Nueva tarea"}
             </h2>
@@ -366,9 +366,9 @@ export default function TaskModal({
             </button>
           </div>
 
-          <form onSubmit={handleSave} className="p-6 space-y-4">
+          <form onSubmit={handleSave} className="p-5 space-y-3">
             {isEditingRecurringInstance && (
-              <div className="rounded-lg bg-[#fbeed2] border border-[#e8dcb5] px-3.5 py-2.5 text-[12.5px] text-[#8a5f0e] leading-snug">
+              <div className="rounded-lg bg-[#fbeed2] border border-[#e8dcb5] px-3 py-1.5 text-[11.5px] text-[#8a5f0e] leading-snug">
                 🔁 Tarea recurrente. El <strong>estado</strong> (Pendiente / En
                 curso / Lista) se aplica solo a esta fecha. Cualquier otro
                 cambio afecta toda la serie.
@@ -397,7 +397,7 @@ export default function TaskModal({
               </label>
               <textarea
                 id="desc"
-                rows={3}
+                rows={2}
                 className="input resize-y"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
@@ -452,7 +452,7 @@ export default function TaskModal({
               </select>
 
               {recurrenceType === "custom" && customConfig && (
-                <div className="mt-1.5 flex items-center justify-between gap-2 text-[12.5px] text-ink-soft">
+                <div className="mt-1 flex items-center justify-between gap-2 text-[12.5px] text-ink-soft">
                   <span className="truncate">
                     ↪ {formatCustomRule(customConfig)}
                   </span>
@@ -571,11 +571,11 @@ export default function TaskModal({
               </div>
             )}
 
-            <div className="flex gap-2 pt-2">
+            <div className="flex gap-2 pt-1">
               <button
                 type="submit"
                 disabled={saving}
-                className="btn btn-primary flex-1 justify-center py-2.5"
+                className="btn btn-primary flex-1 justify-center py-2"
               >
                 {saving ? (
                   <span className="spinner"></span>
@@ -590,12 +590,12 @@ export default function TaskModal({
                   type="button"
                   disabled={saving}
                   onClick={handleDelete}
-                  className="btn btn-danger py-2.5"
+                  className="btn btn-danger py-2"
                 >
                   Eliminar
                 </button>
               )}
-              <button type="button" onClick={onClose} className="btn py-2.5">
+              <button type="button" onClick={onClose} className="btn py-2">
                 Cancelar
               </button>
             </div>
