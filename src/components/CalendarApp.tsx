@@ -23,6 +23,7 @@ import TaskModal from "./TaskModal";
 import DayTasksModal from "./DayTasksModal";
 
 type ViewMode = "month" | "week";
+type StatusFilter = "all" | "pending";
 
 // Cada cuánto se refresca solo el calendario (10 minutos)
 const AUTO_REFRESH_MS = 10 * 60 * 1000;
@@ -63,6 +64,8 @@ export default function CalendarApp({ currentUser }: Props) {
   const [filterAssignee, setFilterAssignee] = useState<string | "all" | "mine">(
     "all"
   );
+  // Nuevo: filtro por estado (Pendientes vs. Todas)
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
 
   // Tick para refrescar el texto "hace X min" cada 30s sin recargar datos
   const [, setNowTick] = useState(0);
@@ -151,11 +154,21 @@ export default function CalendarApp({ currentUser }: Props) {
   }, [tasks, filterAssignee, currentUser.id]);
 
   // 2) Expandir recurrencias + aplicar excepciones de estado por instancia
+  // 3) Aplicar filtro de estado (Pendientes = ocultar las marcadas "Lista")
   const expandedTasks = useMemo(() => {
     const rangeStart = new Date(range.from + "T00:00:00");
     const rangeEnd = new Date(range.to + "T23:59:59");
-    return expandAllTasks(filteredTasks, rangeStart, rangeEnd, exceptions);
-  }, [filteredTasks, exceptions, range.from, range.to]);
+    const expanded = expandAllTasks(
+      filteredTasks,
+      rangeStart,
+      rangeEnd,
+      exceptions
+    );
+    if (statusFilter === "pending") {
+      return expanded.filter((t) => t.status !== "done");
+    }
+    return expanded;
+  }, [filteredTasks, exceptions, range.from, range.to, statusFilter]);
 
   function handlePrev() {
     setCursor(view === "month" ? subMonths(cursor, 1) : addDays(cursor, -7));
@@ -181,14 +194,12 @@ export default function CalendarApp({ currentUser }: Props) {
     setInitialDate(format(new Date(), "yyyy-MM-dd"));
     setModalOpen(true);
   }
-  // Desde el modal de día: abrir una tarea para editar
   function handleTaskClickFromDay(task: Task) {
     setDayModalOpen(false);
     setEditing(task);
     setInitialDate(undefined);
     setModalOpen(true);
   }
-  // Desde el modal de día: crear una tarea nueva en esa fecha
   function handleNewTaskFromDay(day: Date) {
     setDayModalOpen(false);
     setEditing(null);
@@ -209,12 +220,9 @@ export default function CalendarApp({ currentUser }: Props) {
   }
   function handleDeleted(id: string) {
     setTasks((prev) => prev.filter((t) => t.id !== id));
-    // Las excepciones de esa serie se borran solas en la DB (ON DELETE CASCADE);
-    // las limpiamos también del estado local.
     setExceptions((prev) => prev.filter((e) => e.task_id !== id));
   }
 
-  // Una instancia recurrente cambió de estado → guardamos el override local
   function handleExceptionSaved(exception: TaskException) {
     setExceptions((prev) => {
       const idx = prev.findIndex(
@@ -324,7 +332,7 @@ export default function CalendarApp({ currentUser }: Props) {
             {headerLabel}
           </div>
 
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex items-center gap-2 flex-wrap">
             <button
               onClick={loadTasks}
               disabled={loading}
@@ -347,6 +355,33 @@ export default function CalendarApp({ currentUser }: Props) {
                   : `actualizado ${formatRelativeTime(lastUpdate)}`}
               </span>
             )}
+
+            <span className="text-ink-muted">·</span>
+
+            {/* Filtro nuevo: Pendientes / Todas */}
+            <span className="text-[11.5px] uppercase tracking-wider text-ink-muted font-semibold">
+              Mostrar:
+            </span>
+            <div className="flex gap-1">
+              <button
+                type="button"
+                onClick={() => setStatusFilter("pending")}
+                className={`pill text-[12px] px-3 py-1 ${
+                  statusFilter === "pending" ? "active" : ""
+                }`}
+              >
+                Pendientes
+              </button>
+              <button
+                type="button"
+                onClick={() => setStatusFilter("all")}
+                className={`pill text-[12px] px-3 py-1 ${
+                  statusFilter === "all" ? "active" : ""
+                }`}
+              >
+                Todas
+              </button>
+            </div>
 
             <span className="text-ink-muted">·</span>
 
